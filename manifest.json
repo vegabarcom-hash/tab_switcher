@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Last Tab Switcher",
+  "version": "1.0.0",
+  "description": "Switch between two most recently used tabs with Ctrl+Tab, like Alt+Tab",
+  "permissions": [
+    "tabs",
+    "contextMenus"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "switch-to-last-tab": {
+      "suggested_key": "Ctrl+Q",
+      "description": "Switch to the most recently used tab"
+    }
+  }
+}

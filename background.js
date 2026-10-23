@@ -1,120 +1,105 @@
-// Most Recently Used (MRU) list of tabs
-let mru = [];
+const COMMAND = "switch-to-last-tab";
+const MENU_ID = "switch-tabs-test";
+const STORAGE_KEY = "mruByWindow";
 
-// Logging helper
-function log(msg) {
-    console.log('[LastTabSwitcher] ' + msg);
+let mruByWindow = {};
+let stateReady = restoreState();
+
+function log(message, ...details) {
+    console.log(`[LastTabSwitcher] ${message}`, ...details);
 }
 
-// Initialize MRU list with all currently open tabs
-function initializeMRU() {
-    chrome.windows.getAll({ populate: true }, (windows) => {
-        mru = [];
-        windows.forEach((window) => {
-            window.tabs.forEach((tab) => {
-                if (!mru.includes(tab.id)) {
-                    mru.push(tab.id);
-                }
-            });
-        });
-        log('MRU initialized: ' + JSON.stringify(mru));
-    });
-}
-
-// Move tab to front of MRU list
-function moveTabToFront(tabId) {
-    const index = mru.indexOf(tabId);
-    if (index > -1) {
-        mru.splice(index, 1);
-    }
-    mru.unshift(tabId);
-    log('Moved tab ' + tabId + ' to front. MRU: ' + JSON.stringify(mru));
-}
-
-// Remove tab from MRU list
-function removeTabFromMRU(tabId) {
-    const index = mru.indexOf(tabId);
-    if (index > -1) {
-        mru.splice(index, 1);
-        log('Removed tab ' + tabId + '. MRU: ' + JSON.stringify(mru));
+async function restoreState() {
+    try {
+        const stored = await chrome.storage.session.get(STORAGE_KEY);
+        mruByWindow = stored[STORAGE_KEY] || {};
+    } catch (error) {
+        log("Could not restore state", error);
+        mruByWindow = {};
     }
 }
 
-// Perform the switch
-function switchToLastTab() {
-    log('Switch command received. MRU: ' + JSON.stringify(mru));
-    
-    if (mru.length >= 2) {
-        const targetTabId = mru[1];
-        log('Switching to tab ' + targetTabId);
-        chrome.tabs.update(targetTabId, { active: true });
-    } else if (mru.length === 1) {
-        log('Only one tab in MRU, looking for other tabs');
-        chrome.tabs.query({}, (tabs) => {
-            const otherTab = tabs.find(tab => tab.id !== mru[0]);
-            if (otherTab) {
-                log('Found other tab ' + otherTab.id + ', switching');
-                chrome.tabs.update(otherTab.id, { active: true });
-            }
-        });
-    } else {
-        log('MRU is empty!');
+async function saveState() {
+    try {
+        await chrome.storage.session.set({ [STORAGE_KEY]: mruByWindow });
+    } catch (error) {
+        log("Could not save state", error);
     }
 }
 
-// Listen for tab activation
-chrome.tabs.onActivated.addListener((activeInfo) => {
-    log('Tab activated: ' + activeInfo.tabId);
-    moveTabToFront(activeInfo.tabId);
+async function rememberTab(tabId, windowId) {
+    await stateReady;
+    const key = String(windowId);
+    const current = mruByWindow[key] || [];
+    mruByWindow[key] = [tabId, ...current.filter((id) => id !== tabId)];
+    await saveState();
+}
+
+async function forgetTab(tabId, windowId) {
+    await stateReady;
+    const key = String(windowId);
+    mruByWindow[key] = (mruByWindow[key] || []).filter((id) => id !== tabId);
+    await saveState();
+}
+
+async function switchToLastTab() {
+    await stateReady;
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!activeTab || activeTab.id == null || activeTab.windowId == null) {
+        log("No active tab found");
+        return;
+    }
+
+    const key = String(activeTab.windowId);
+    const tabs = await chrome.tabs.query({ windowId: activeTab.windowId });
+    const validIds = new Set(tabs.map((tab) => tab.id));
+    const history = (mruByWindow[key] || []).filter((id) => validIds.has(id));
+    if (history[0] !== activeTab.id) history.unshift(activeTab.id);
+
+    let targetId = history.find((id) => id !== activeTab.id);
+    if (targetId == null) {
+        const candidate = tabs
+            .filter((tab) => tab.id !== activeTab.id)
+            .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+        targetId = candidate?.id;
+    }
+
+    if (targetId == null) {
+        log("There is no other tab in the current window");
+        return;
+    }
+
+    mruByWindow[key] = history;
+    await saveState();
+    try {
+        await chrome.tabs.update(targetId, { active: true });
+        log(`Switched from tab ${activeTab.id} to ${targetId}`);
+    } catch (error) {
+        await forgetTab(targetId, activeTab.windowId);
+        log(`Could not activate tab ${targetId}`, error);
+    }
+}
+
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => rememberTab(tabId, windowId));
+chrome.tabs.onRemoved.addListener((tabId, { windowId }) => forgetTab(tabId, windowId));
+chrome.windows.onRemoved.addListener(async (windowId) => {
+    await stateReady;
+    delete mruByWindow[String(windowId)];
+    await saveState();
 });
 
-// Listen for tab creation
-chrome.tabs.onCreated.addListener((tab) => {
-    log('Tab created: ' + tab.id);
-    moveTabToFront(tab.id);
-});
-
-// Listen for tab removal
-chrome.tabs.onRemoved.addListener((tabId) => {
-    log('Tab removed: ' + tabId);
-    removeTabFromMRU(tabId);
-});
-
-// Handle the keyboard command
 chrome.commands.onCommand.addListener((command) => {
-    log('Command received: ' + command);
-    if (command === "switch-to-last-tab") {
-        switchToLastTab();
-    }
+    if (command === COMMAND) switchToLastTab();
 });
 
-// Create context menu for testing
 chrome.runtime.onInstalled.addListener(() => {
-    initializeMRU();
-    chrome.contextMenus.create({
-        id: "switch-tabs-test",
-        title: "Switch to Last Tab (Test)",
-        contexts: ["all"]
+    chrome.contextMenus.removeAll(() => {
+        chrome.contextMenus.create({ id: MENU_ID, title: "Switch to Last Tab (Test)", contexts: ["all"] });
     });
-    log('Extension installed and initialized');
 });
 
-// Handle context menu click
 chrome.contextMenus.onClicked.addListener((info) => {
-    if (info.menuItemId === "switch-tabs-test") {
-        switchToLastTab();
-    }
+    if (info.menuItemId === MENU_ID) switchToLastTab();
 });
 
-// Listen for startup
-chrome.runtime.onStartup.addListener(() => {
-    log('Browser startup detected');
-    initializeMRU();
-});
-
-// Initialize immediately
-log('Background script loaded');
-initializeMRU();
-
-
-
+log("Background service worker loaded");

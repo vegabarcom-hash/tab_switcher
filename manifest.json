@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Last Tab Switcher",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Switch between two most recently used tabs with Ctrl+Tab, like Alt+Tab",
   "permissions": [
     "tabs",
-    "contextMenus"
+    "contextMenus",
+    "storage"
   ],
   "background": {
     "service_worker": "background.js"

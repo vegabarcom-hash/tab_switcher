@@ -1,0 +1,5 @@
+comet-hotkey/publish/
+comet-hotkey/*.exe
+comet-hotkey/*.log
+comet-hotkey/bin/
+comet-hotkey/obj/

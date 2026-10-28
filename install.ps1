@@ -25,7 +25,31 @@ $shortcut.WorkingDirectory = $publishDir
 $shortcut.Description = 'Make Ctrl+Tab switch immediately to the last active Comet tab'
 $shortcut.Save()
 
-Start-Process -FilePath $exePath -WindowStyle Hidden
+$taskName = 'Comet Tab Hotkey Watchdog'
+$taskAction = New-ScheduledTaskAction -Execute $exePath -WorkingDirectory $publishDir
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1)
+$taskSettings = New-ScheduledTaskSettingsSet `
+    -MultipleInstances IgnoreNew `
+    -RestartCount 999 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -StartWhenAvailable
 
-Write-Host 'Hotkey helper installed and started.'
+Register-ScheduledTask `
+    -TaskName $taskName `
+    -Action $taskAction `
+    -Trigger @($logonTrigger, $watchdogTrigger) `
+    -Settings $taskSettings `
+    -Description 'Keeps the Comet Ctrl+Tab helper running and restarts it after failure.' `
+    -Force | Out-Null
+
+Start-ScheduledTask -TaskName $taskName
+Start-Sleep -Milliseconds 500
+if (-not (Get-Process -Name 'CometTabHotkey' -ErrorAction SilentlyContinue)) {
+    Start-Process -FilePath $exePath -WorkingDirectory $publishDir -WindowStyle Hidden
+}
+
+Write-Host 'Hotkey helper installed with automatic restart and started.'
 Write-Host 'Reload the extension at comet://extensions before testing Ctrl+Tab.'
